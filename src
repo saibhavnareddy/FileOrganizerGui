@@ -1,110 +1,143 @@
 import javax.swing.*;
 import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
+import java.awt.event.*;
 import java.io.File;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.util.HashMap;
-import java.util.Map;
+import java.nio.file.*;
+import java.util.Stack;
 
 public class FileOrganizerGUI {
     private JFrame frame;
     private JTextArea logArea;
-    private JProgressBar progressBar;
-    private File selectedDirectory;
+    private JFileChooser fileChooser;
+    private Stack<Path[]> undoStack = new Stack<>();
+    private File selectedFolder;
 
     public FileOrganizerGUI() {
-        frame = new JFrame("File Organizer");
-        frame.setSize(500, 400);
+        try {
+            UIManager.setLookAndFeel("javax.swing.plaf.nimbus.NimbusLookAndFeel");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        frame = new JFrame("🗂 File Organizer");
+        frame.setSize(600, 450);
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.setLayout(new BorderLayout());
 
+        // Dark mode setup
+        frame.getContentPane().setBackground(Color.BLACK);
+
         JPanel panel = new JPanel();
-        JButton selectFolderButton = new JButton("Select Folder");
-        JButton organizeButton = new JButton("Organize Files");
-        JButton exitButton = new JButton("Exit");
+        panel.setBackground(Color.DARK_GRAY);
 
-        selectFolderButton.addActionListener(e -> selectFolder());
-        organizeButton.addActionListener(e -> organizeFiles());
-        exitButton.addActionListener(e -> System.exit(0));
+        JButton selectButton = createButton("📂 Select Folder");
+        JButton organizeButton = createButton("🔄 Organize Files");
+        JButton undoButton = createButton("↩ Undo");
+        JButton exitButton = createButton("❌ Exit");
 
-        panel.add(selectFolderButton);
+        panel.add(selectButton);
         panel.add(organizeButton);
+        panel.add(undoButton);
         panel.add(exitButton);
 
         logArea = new JTextArea();
         logArea.setEditable(false);
+        logArea.setBackground(Color.BLACK);
+        logArea.setForeground(Color.GREEN);
+        logArea.setFont(new Font("Monospaced", Font.BOLD, 14));
         JScrollPane scrollPane = new JScrollPane(logArea);
-
-        progressBar = new JProgressBar();
-        progressBar.setStringPainted(true);
+        scrollPane.getViewport().setBackground(Color.BLACK);
 
         frame.add(panel, BorderLayout.NORTH);
         frame.add(scrollPane, BorderLayout.CENTER);
-        frame.add(progressBar, BorderLayout.SOUTH);
+
+        fileChooser = new JFileChooser();
+        fileChooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+
+        selectButton.addActionListener(e -> selectFolder());
+        organizeButton.addActionListener(e -> organizeFiles());
+        undoButton.addActionListener(e -> undoLastAction());
+        exitButton.addActionListener(e -> System.exit(0));
 
         frame.setVisible(true);
     }
 
+    private JButton createButton(String text) {
+        JButton button = new JButton(text);
+        button.setBackground(Color.DARK_GRAY);
+        button.setForeground(Color.WHITE);
+        button.setFocusPainted(false);
+        return button;
+    }
+
     private void selectFolder() {
-        JFileChooser fileChooser = new JFileChooser();
-        fileChooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        int option = fileChooser.showOpenDialog(frame);
-        if (option == JFileChooser.APPROVE_OPTION) {
-            selectedDirectory = fileChooser.getSelectedFile();
-            logArea.append("Selected folder: " + selectedDirectory.getAbsolutePath() + "\n");
+        if (fileChooser.showOpenDialog(frame) == JFileChooser.APPROVE_OPTION) {
+            selectedFolder = fileChooser.getSelectedFile();
+            logArea.append("📁 Selected folder: " + selectedFolder.getAbsolutePath() + "\n");
         }
     }
 
     private void organizeFiles() {
-        if (selectedDirectory == null) {
-            JOptionPane.showMessageDialog(frame, "Please select a folder first.", "Error", JOptionPane.ERROR_MESSAGE);
+        if (selectedFolder == null) {
+            logArea.append("⚠ Please select a folder first!\n");
             return;
         }
 
-        new Thread(() -> {
-            File[] files = selectedDirectory.listFiles();
-            if (files == null) return;
-            
-            Map<String, String> extensionMap = new HashMap<>();
-            extensionMap.put(".jpg", "Images");
-            extensionMap.put(".png", "Images");
-            extensionMap.put(".mp3", "Music");
-            extensionMap.put(".mp4", "Videos");
-            extensionMap.put(".pdf", "Documents");
-            extensionMap.put(".txt", "Text Files");
+        File[] files = selectedFolder.listFiles();
+        if (files == null || files.length == 0) {
+            logArea.append("⚠ No files found in the selected folder!\n");
+            return;
+        }
 
-            progressBar.setMaximum(files.length);
-            progressBar.setValue(0);
-            
-            int count = 0;
-            for (File file : files) {
-                if (file.isFile()) {
-                    String fileName = file.getName();
-                    for (String ext : extensionMap.keySet()) {
-                        if (fileName.endsWith(ext)) {
-                            File newDir = new File(selectedDirectory, extensionMap.get(ext));
-                            if (!newDir.exists()) newDir.mkdirs();
-                            
-                            Path source = file.toPath();
-                            Path destination = new File(newDir, file.getName()).toPath();
-                            try {
-                                Files.move(source, destination, StandardCopyOption.REPLACE_EXISTING);
-                                logArea.append("Moved: " + fileName + " -> " + extensionMap.get(ext) + "\n");
-                            } catch (Exception e) {
-                                logArea.append("Error moving: " + fileName + "\n");
-                            }
-                            break;
-                        }
-                    }
+        for (File file : files) {
+            if (file.isFile()) {
+                String extension = getFileExtension(file);
+                Path targetDir = selectedFolder.toPath().resolve(getCategory(extension));
+
+                try {
+                    Files.createDirectories(targetDir);
+                    Path targetPath = targetDir.resolve(file.getName());
+                    Files.move(file.toPath(), targetPath, StandardCopyOption.REPLACE_EXISTING);
+                    undoStack.push(new Path[]{targetPath, file.toPath()});
+                    logArea.append("✅ Moved: " + file.getName() + " -> " + targetDir.getFileName() + "\n");
+                } catch (Exception e) {
+                    logArea.append("❌ Error moving: " + file.getName() + "\n");
                 }
-                count++;
-                progressBar.setValue(count);
             }
-            logArea.append("\nFile organization complete!\n");
-        }).start();
+        }
+        logArea.append("\n🎉 File organization complete!\n");
+    }
+
+    private void undoLastAction() {
+        if (undoStack.isEmpty()) {
+            logArea.append("⚠ No actions to undo.\n");
+            return;
+        }
+
+        Path[] paths = undoStack.pop();
+        try {
+            Files.move(paths[0], paths[1], StandardCopyOption.REPLACE_EXISTING);
+            logArea.append("↩ Undone: " + paths[1].getFileName() + "\n");
+        } catch (Exception e) {
+            logArea.append("❌ Error undoing: " + paths[1].getFileName() + "\n");
+        }
+    }
+
+    private String getFileExtension(File file) {
+        String name = file.getName();
+        int lastIndex = name.lastIndexOf(".");
+        return (lastIndex == -1) ? "other" : name.substring(lastIndex + 1);
+    }
+
+    private String getCategory(String extension) {
+        switch (extension.toLowerCase()) {
+            case "jpg": case "png": case "gif": return "Images";
+            case "mp4": case "mkv": case "avi": return "Videos";
+            case "mp3": case "wav": case "flac": return "Music";
+            case "pdf": case "docx": case "txt": return "Documents";
+            case "zip": case "rar": case "7z": return "Archives";
+            default: return "Other";
+        }
     }
 
     public static void main(String[] args) {
