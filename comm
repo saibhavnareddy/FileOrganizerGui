@@ -1,0 +1,6 @@
+git init  
+git add .  
+git commit -m "Added File Organizer GUI project"  
+git branch -M main  
+git remote add origin <your-repo-link>  
+git push -u origin main  
